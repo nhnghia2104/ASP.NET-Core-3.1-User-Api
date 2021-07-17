@@ -17,7 +17,7 @@ namespace ShopApi.Helpers
 
             //CreateMap<CreateRequest, Account>();
 
-            CreateMap<UpdateUserModel, User>()
+            CreateMap<UpdateUserRequest, User>()
                 .ForAllMembers(x => x.Condition(
                     (src, dest, prop) =>
                     {

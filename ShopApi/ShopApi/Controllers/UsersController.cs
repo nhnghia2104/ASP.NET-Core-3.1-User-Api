@@ -83,11 +83,12 @@ namespace ShopApi.Controllers
 
         // Authenticate with third-party identity provider
         [HttpPost("third-party-authenticate")]
-        public IActionResult Authenticate(ThirdPartyAuthenticateRequest model)
+        public IActionResult Authenticate(AuthenticationProviderRequest model)
         {
             try
             {
-                var response = _userService.Authenticate3rdPartyAsync(model);
+                var response = _userService.AuthenticateWithThirdParty(model, ipAddress());
+                setTokenCookie(response.RefreshToken);
                 return Ok(response);
             }
             catch (ApplicationException ex)
@@ -118,7 +119,7 @@ namespace ShopApi.Controllers
         }
 
         [HttpPost("forgot-password")]
-        public IActionResult ForgotPassword(ForgotPasswordModel model)
+        public IActionResult ForgotPassword(ForgotPasswordRequest model)
         {
             _userService.ForgotPassword(model, Request.Headers["origin"]);
             return Ok(new { message = "Please check your email for resetting password" });
@@ -152,7 +153,7 @@ namespace ShopApi.Controllers
 
         [Authorize]
         [HttpPut("{id}")]
-        public IActionResult Update(string id, [FromBody] UpdateUserModel model)
+        public IActionResult Update(string id, [FromBody] UpdateUserRequest model)
         {
             try
             {

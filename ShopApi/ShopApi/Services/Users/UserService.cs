@@ -25,13 +25,13 @@ namespace ShopApi.Services.Users
         AuthenticateResponse Authenticate(AuthenticateRequest model, string ipAddress);
         AuthenticateResponse RefreshToken(string token, string ipAddress);
         void RevokeToken(string token, string ipAddress);
-        ThirdPartyAuthenticateResponse Authenticate3rdPartyAsync(ThirdPartyAuthenticateRequest model);
+        AuthenticationProviderResponse AuthenticateWithThirdParty(AuthenticationProviderRequest model, string ipAddress);
         Task<IEnumerable<User>> GetAllAsync();
         Task<User> GetByIdAsync(string Id);
-        void Update(string id, UpdateUserModel model);
+        void Update(string id, UpdateUserRequest model);
         void Register(UserRegisterRequest model, string origin);
         void VerifyEmail(string token);
-        void ForgotPassword(ForgotPasswordModel model, string origin);
+        void ForgotPassword(ForgotPasswordRequest model, string origin);
         void ResetPassword(ResetPasswordRequest model);
         
     }
@@ -148,7 +148,7 @@ namespace ShopApi.Services.Users
             }
         }
 
-        public ThirdPartyAuthenticateResponse Authenticate3rdPartyAsync(ThirdPartyAuthenticateRequest model)
+        public AuthenticationProviderResponse AuthenticateWithThirdParty(AuthenticationProviderRequest model, string ipAddress)
         {
             checkValidModel(model);
             using (var scope = scopeFactory.CreateScope())
@@ -162,44 +162,32 @@ namespace ShopApi.Services.Users
 
                 if (found == null)
                 {
-                    var newAuth = insertAuthenticationProviderAsync(model);
-                    var response = new ThirdPartyAuthenticateResponse
-                    {
-                        Token = generateJwtToken(newAuth.User)
-                    };
-                    response.CopyPropertiesFrom(newAuth.User);
-                    return response;
+                    // register new authentication privider
+                    Register(model);
+
+                    found = appDb.AuthenticationProviders
+                    .Where(x => x.Id == String.Format("{0}{1}", model.ProviderType.ToString(), model.KeyProvided))
+                    .Include(x => x.User)
+                    .FirstOrDefault();
                 }
-                else
+
+                var response = new AuthenticationProviderResponse
                 {
-                    var response = new ThirdPartyAuthenticateResponse
-                    {
-                        Token = generateJwtToken(found.User)
-                    };
-                    response.CopyPropertiesFrom(found.User);
-                    return response;
-                }
-            }
-        }
+                    Token = generateJwtToken(found.User)
+                };
+                response.CopyPropertiesFrom(found.User);
+                var refreshToken = generateRefreshToken(ipAddress);
+                found.User.RefreshTokens.Add(refreshToken);
 
-        private AuthenticationProvider insertAuthenticationProviderAsync(ThirdPartyAuthenticateRequest model)
-        {
-            var authenticationProvider = new AuthenticationProvider();
-            authenticationProvider.User = new User
-            {
-                Id = IdentityUtil.GenerateId(),
-                Created = DateTimeOffset.Now,
-            };
-            authenticationProvider.CopyPropertiesFrom(model);
+                // remove old refresh tokens from account
+                removeOldRefreshTokens(found.User);
 
-            using (var scope = scopeFactory.CreateScope())
-            {
-                var appDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-                authenticationProvider.Id = String.Format("{0}{1}", authenticationProvider.ProviderTypeString, authenticationProvider.KeyProvided);
-                appDb.AuthenticationProviders.Add(authenticationProvider);
+                // save changes to db
+                appDb.Update(found);
                 appDb.SaveChanges();
-                return authenticationProvider;
+
+                response.RefreshToken = refreshToken.Token;
+                return response;
             }
         }
 
@@ -224,7 +212,7 @@ namespace ShopApi.Services.Users
             }
         }
 
-        public void Update(string id, UpdateUserModel model)
+        public void Update(string id, UpdateUserRequest model)
         {
             using (var scope = scopeFactory.CreateScope())
             {
@@ -293,6 +281,28 @@ namespace ShopApi.Services.Users
             }
         }
 
+        // Register new Authentication Provider
+        public void Register(AuthenticationProviderRequest model)
+        {
+            var authenticationProvider = new AuthenticationProvider();
+            authenticationProvider.User = new User
+            {
+                Id = IdentityUtil.GenerateId(),
+                Created = DateTimeOffset.Now,
+                Verified = DateTimeOffset.Now
+            };
+            authenticationProvider.CopyPropertiesFrom(model);
+
+            using (var scope = scopeFactory.CreateScope())
+            {
+                var appDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+                authenticationProvider.Id = String.Format("{0}{1}", authenticationProvider.ProviderTypeString, authenticationProvider.KeyProvided);
+                appDb.AuthenticationProviders.Add(authenticationProvider);
+                appDb.SaveChanges();
+            }
+        }
+
         public void VerifyEmail(string token)
         {
             using (var scope = scopeFactory.CreateScope())
@@ -314,7 +324,7 @@ namespace ShopApi.Services.Users
 
         #region Password
 
-        public void ForgotPassword(ForgotPasswordModel model, string origin)
+        public void ForgotPassword(ForgotPasswordRequest model, string origin)
         {
             using (var scope = scopeFactory.CreateScope())
             {
@@ -425,7 +435,7 @@ namespace ShopApi.Services.Users
             return BitConverter.ToString(randomBytes).Replace("-", "");
         }
 
-        private void checkValidModel(ThirdPartyAuthenticateRequest model)
+        private void checkValidModel(AuthenticationProviderRequest model)
         {
             if (string.IsNullOrWhiteSpace(model.KeyProvided))
                 throw new ApplicationException("`KeyProvided` can not be null or white space.");
@@ -514,7 +524,7 @@ namespace ShopApi.Services.Users
             var tokenDescriptor = new SecurityTokenDescriptor
             {
                 Subject = new ClaimsIdentity(new[] { new Claim("id", user.Id.ToString()) }),
-                Expires = DateTime.UtcNow.AddMinutes(3),
+                Expires = DateTime.UtcNow.AddDays(7),
                 SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
             };
             var token = tokenHandler.CreateToken(tokenDescriptor);
